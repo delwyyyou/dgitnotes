@@ -22,9 +22,12 @@ class GitNotesRepository(private val baseDir: File) {
 
     private fun fileName(id: String) = "$id.md"
 
+    // Вспомогательная функция для безопасной работы с JGit
     private suspend fun <T> withGit(block: (Git) -> T): T = withContext(Dispatchers.IO) {
         mutex.withLock {
+            // ГАРАНТИРУЕМ СУЩЕСТВОВАНИЕ ПАПКИ ПЕРЕД ЛЮБОЙ ОПЕРАЦИЕЙ
             if (!baseDir.exists()) baseDir.mkdirs()
+            
             val dotGit = File(baseDir, ".git")
             val git = if (dotGit.exists()) Git.open(baseDir)
             else Git.init().setDirectory(baseDir).setInitialBranch("main").call()
@@ -36,6 +39,7 @@ class GitNotesRepository(private val baseDir: File) {
         }
     }
 
+    // Синхронная версия для listNotes
     private fun <T> withGitSync(block: (Git) -> T): T {
         if (!baseDir.exists()) baseDir.mkdirs()
         val dotGit = File(baseDir, ".git")
@@ -84,8 +88,15 @@ class GitNotesRepository(private val baseDir: File) {
     // ---------- ЗАПИСЬ + КОММИТ ----------
 
     suspend fun createNote(): String = withContext(Dispatchers.IO) {
+        // ИСПРАВЛЕНИЕ: Явно создаем папку перед записью файла
+        if (!baseDir.exists()) baseDir.mkdirs()
+        
         val id = java.util.UUID.randomUUID().toString()
-        File(baseDir, fileName(id)).writeText("")
+        val noteFile = File(baseDir, fileName(id))
+        
+        // Теперь запись гарантированно пройдет, так как папка создана выше
+        noteFile.writeText("")
+        
         withGit { g ->
             g.add().addFilepattern(fileName(id)).call()
             g.commit()
@@ -160,7 +171,6 @@ class GitNotesRepository(private val baseDir: File) {
                 if (count > 1000) break
 
                 if (path == null || changedIn(repo, c, path)) {
-                    // shortMessage в JGit это УЖЕ String, конвертация не нужна
                     out += CommitInfo(
                         hash = c.id.name,
                         shortHash = c.id.name.take(7),
