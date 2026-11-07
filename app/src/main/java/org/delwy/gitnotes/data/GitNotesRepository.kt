@@ -3,11 +3,9 @@ package org.delwy.gitnotes.data
 import org.eclipse.jgit.api.Git
 import org.eclipse.jgit.api.errors.EmptyCommitException
 import org.eclipse.jgit.lib.ObjectId
-import org.eclipse.jgit.lib.Repository
 import org.eclipse.jgit.revwalk.RevCommit
 import org.eclipse.jgit.revwalk.RevWalk
 import org.eclipse.jgit.treewalk.TreeWalk
-import org.eclipse.jgit.treewalk.filter.PathFilter
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -22,12 +20,9 @@ class GitNotesRepository(private val baseDir: File) {
 
     private fun fileName(id: String) = "$id.md"
 
-    // Вспомогательная функция для безопасной работы с JGit
     private suspend fun <T> withGit(block: (Git) -> T): T = withContext(Dispatchers.IO) {
         mutex.withLock {
-            // ГАРАНТИРУЕМ СУЩЕСТВОВАНИЕ ПАПКИ ПЕРЕД ЛЮБОЙ ОПЕРАЦИЕЙ
             if (!baseDir.exists()) baseDir.mkdirs()
-            
             val dotGit = File(baseDir, ".git")
             val git = if (dotGit.exists()) Git.open(baseDir)
             else Git.init().setDirectory(baseDir).setInitialBranch("main").call()
@@ -39,7 +34,6 @@ class GitNotesRepository(private val baseDir: File) {
         }
     }
 
-    // Синхронная версия для listNotes
     private fun <T> withGitSync(block: (Git) -> T): T {
         if (!baseDir.exists()) baseDir.mkdirs()
         val dotGit = File(baseDir, ".git")
@@ -88,15 +82,9 @@ class GitNotesRepository(private val baseDir: File) {
     // ---------- ЗАПИСЬ + КОММИТ ----------
 
     suspend fun createNote(): String = withContext(Dispatchers.IO) {
-        // ИСПРАВЛЕНИЕ: Явно создаем папку перед записью файла
         if (!baseDir.exists()) baseDir.mkdirs()
-        
         val id = java.util.UUID.randomUUID().toString()
-        val noteFile = File(baseDir, fileName(id))
-        
-        // Теперь запись гарантированно пройдет, так как папка создана выше
-        noteFile.writeText("")
-        
+        File(baseDir, fileName(id)).writeText("")
         withGit { g ->
             g.add().addFilepattern(fileName(id)).call()
             g.commit()
@@ -111,6 +99,7 @@ class GitNotesRepository(private val baseDir: File) {
 
     suspend fun commitNote(id: String, content: String, message: String): Boolean =
         withContext(Dispatchers.IO) {
+            if (!baseDir.exists()) baseDir.mkdirs()
             File(baseDir, fileName(id)).writeText(content)
             try {
                 withGit { g ->
@@ -138,70 +127,51 @@ class GitNotesRepository(private val baseDir: File) {
         }
     }
 
-    // ---------- ИСТОРИЯ ----------
+    // ---------- ИСТОРИЯ (через LogCommand = git log -- path) ----------
 
     suspend fun history(noteId: String?): List<CommitInfo> = withContext(Dispatchers.IO) {
         withGit { g ->
-            if (noteId != null) {
-                commitsOf(g.repository, fileName(noteId))
-            } else {
-                commitsOf(g.repository, null)
-            }
+            commitsOf(g, noteId?.let { fileName(it) })
         }
     }
 
     private fun historySync(noteId: String): List<CommitInfo> {
         val path = fileName(noteId)
         return withGitSync { g ->
-            commitsOf(g.repository, path)
+            commitsOf(g, path)
         }
     }
 
-    private fun commitsOf(repo: Repository, path: String?): List<CommitInfo> {
+    private fun commitsOf(git: Git, path: String?): List<CommitInfo> {
+        val repo = git.repository
         val head = repo.resolve("HEAD") ?: return emptyList()
-        val walk = RevWalk(repo)
-        return try {
-            walk.markStart(walk.parseCommit(head))
-            walk.setRetainBody(false)
 
-            val out = ArrayList<CommitInfo>()
-            var count = 0
-            for (c in walk) {
-                count++
-                if (count > 1000) break
+        val logCmd = git.log().add(head)
+        if (path != null) logCmd.addPath(path)   // фильтрация по файлу, как git log -- file
+        logCmd.setMaxCount(1000)
 
-                if (path == null || changedIn(repo, c, path)) {
-                    out += CommitInfo(
-                        hash = c.id.name,
-                        shortHash = c.id.name.take(7),
-                        message = c.shortMessage?.trim() ?: "",
-                        author = c.authorIdent?.name ?: "—",
-                        date = c.commitTime.toLong() * 1000L
-                    )
-                }
+        val out = ArrayList<CommitInfo>()
+        try {
+            for (c in logCmd.call()) {
+                out += CommitInfo(
+                    hash = c.id.name,
+                    shortHash = c.id.name.take(7),
+                    message = c.shortMessage?.trim() ?: "",
+                    author = c.authorIdent?.name ?: "—",
+                    date = c.commitTime.toLong() * 1000L
+                )
             }
-            out
-        } finally {
-            walk.dispose()
+        } catch (_: Exception) {
+            // если log по какой-то причине упал — возвращаем что успели собрать
         }
+        return out
     }
 
-    private fun changedIn(repo: Repository, c: RevCommit, path: String): Boolean {
-        val cur = blobIdAt(repo, c, path)
-        if (c.parentCount == 0) return cur != null
-        for (p in c.parents) {
-            if (blobIdAt(repo, p, path) != cur) return true
-        }
-        return false
-    }
-
-    private fun blobIdAt(repo: Repository, c: RevCommit, path: String): ObjectId? {
-        val tw = TreeWalk(repo)
+    // Надёжный поиск blob по пути в дереве конкретного коммита
+    private fun blobIdAt(c: RevCommit, path: String): ObjectId? {
+        val tw = TreeWalk.forPath(c.repository, path, c.tree) ?: return null
         return try {
-            tw.addTree(c.tree)
-            tw.isRecursive = true
-            tw.setFilter(PathFilter.create(path))
-            if (tw.next()) tw.getObjectId(0) else null
+            tw.getObjectId(0)
         } finally {
             tw.close()
         }
@@ -217,7 +187,7 @@ class GitNotesRepository(private val baseDir: File) {
             val walk = RevWalk(repo)
             val bytes: ByteArray? = try {
                 val commit = walk.parseCommit(commitId)
-                val blob = blobIdAt(repo, commit, fileName(id))
+                val blob = blobIdAt(commit, fileName(id))
                 blob?.let { oid -> repo.open(oid).bytes }
             } finally {
                 walk.dispose()
