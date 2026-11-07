@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -52,14 +53,24 @@ fun EditorScreen(
 ) {
     var content by remember(noteId) { mutableStateOf("") }
     var original by remember(noteId) { mutableStateOf("") }
+    
+    // Загружаем текст заметки при старте
     LaunchedEffect(noteId) {
         val c = vm.loadContent(noteId)
-        content = c; original = c
+        content = c
+        original = c
     }
+    
     val dirty = content != original
     val msg by vm.message.collectAsState()
     val snackbar = remember { SnackbarHostState() }
-    LaunchedEffect(msg) { msg?.let { snackbar.showSnackbar(it); vm.clearMessage() } }
+    
+    LaunchedEffect(msg) {
+        msg?.let { 
+            snackbar.showSnackbar(it)
+            vm.clearMessage() 
+        }
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -67,16 +78,14 @@ fun EditorScreen(
         topBar = {
             TopAppBar(
                 navigationIcon = {
-                    Text(
-                        "←",
-                        modifier = Modifier
-                            .padding(start = 16.dp)
-                            .clip(RoundedCornerShape(50))
-                            .background(Color.Transparent)
-                            .padding(8.dp),
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = MaterialTheme.colorScheme.onSurface
-                    ).also { /* клик обрабатывается ниже через Box‑обёртку не нужен */ }
+                    // КЛИКАБЕЛЬНАЯ СТРЕЛКА НАЗАД
+                    IconButton(onClick = onBack) {
+                        Text(
+                            "←",
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                 },
                 title = {
                     Text(
@@ -93,8 +102,11 @@ fun EditorScreen(
         }
     ) { inner ->
         Column(modifier = Modifier.fillMaxSize().padding(inner)) {
-            DisplayBand(text = content.length.toString())
+            
+            // Дисплей сверху справа (длина текста)
+            DisplayBand(text = "${content.length} симв.")
 
+            // Поле ввода
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -109,7 +121,9 @@ fun EditorScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .verticalScroll(rememberScrollState()),
-                    placeholder = { Text("Начните писать…", color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                    placeholder = { 
+                        Text("Начните писать...", color = MaterialTheme.colorScheme.onSurfaceVariant) 
+                    },
                     textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
                     keyboardOptions = KeyboardOptions(
                         capitalization = Capitalization.Sentences,
@@ -125,26 +139,28 @@ fun EditorScreen(
                 )
             }
 
+            // Панель действий снизу
             ActionBar(
-                { m ->
-                    GitButton("AC", BtnRole.ACTION, {
-                        content = original
-                    }, m, enabled = dirty)
+                { m -> 
+                    // AC - Отменить изменения (вернуть к оригиналу)
+                    GitButton("AC", BtnRole.ACTION, onClick = { content = original }, modifier = m, enabled = dirty) 
                 },
-                { m ->
-                    GitButton("Удалить", BtnRole.ACTION, {
-                        vm.deleteNote(noteId, onBack)
-                    }, m)
+                { m -> 
+                    // Удалить заметку
+                    GitButton("Удалить", BtnRole.ACTION, onClick = { vm.deleteNote(noteId, onBack) }, modifier = m) 
                 },
-                { m ->
-                    GitButton("История", BtnRole.OPERATOR, { onOpenHistory(noteId) }, m)
+                { m -> 
+                    // Открыть историю этой заметки
+                    GitButton("История", BtnRole.OPERATOR, onClick = { onOpenHistory(noteId) }, modifier = m) 
                 },
-                { m ->
-                    GitButton("✓ Коммит", BtnRole.PRIMARY, {
+                { m -> 
+                    // Сделать коммит
+                    GitButton("✓ Коммит", BtnRole.PRIMARY, onClick = {
+                        // Берем первую строку как сообщение коммита или дефолт
                         val firstLine = content.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.take(50)
                         vm.commitNote(noteId, content, firstLine ?: "Правка заметки")
-                        original = content
-                    }, m, enabled = dirty)
+                        original = content // Обновляем baseline, чтобы кнопка стала неактивной
+                    }, modifier = m, enabled = dirty) 
                 }
             )
         }
