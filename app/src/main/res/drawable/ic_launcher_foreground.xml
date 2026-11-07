@@ -1,20 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- стилизованный «коммит‑нода» + линия ветки -->
+    
+    <!-- Стилизованный граф коммитов (ветка + узлы) -->
+    <!-- Линии между нодами -->
     <path
         android:strokeColor="#F6D2EC"
         android:strokeWidth="6"
         android:strokeLineCap="round"
         android:pathData="M54,30 L54,54 M54,54 L72,72 M54,54 L36,72" />
+        
+    <!-- Верхний нод (главный коммит) -->
     <path
         android:fillColor="#F6D2EC"
         android:pathData="M54,22 m-9,0 a9,9 0 1,0 18,0 a9,9 0 1,0 -18,0" />
+        
+    <!-- Правый нижний нод -->
     <path
         android:fillColor="#F6D2EC"
         android:pathData="M72,72 m-7,0 a7,7 0 1,0 14,0 a7,7 0 1,0 -14,0" />
+        
+    <!-- Левый нижний нод -->
     <path
         android:fillColor="#F6D2EC"
         android:pathData="M36,72 m-7,0 a7,7 0 1,0 14,0 a7,7 0 1,0 -14,0" />
