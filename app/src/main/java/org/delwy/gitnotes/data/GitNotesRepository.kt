@@ -3,9 +3,11 @@ package org.delwy.gitnotes.data
 import org.eclipse.jgit.api.Git
 import org.eclipse.jgit.api.errors.EmptyCommitException
 import org.eclipse.jgit.lib.ObjectId
+import org.eclipse.jgit.lib.Repository
 import org.eclipse.jgit.revwalk.RevCommit
 import org.eclipse.jgit.revwalk.RevWalk
 import org.eclipse.jgit.treewalk.TreeWalk
+import org.eclipse.jgit.treewalk.filter.PathFilter
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -127,7 +129,7 @@ class GitNotesRepository(private val baseDir: File) {
         }
     }
 
-    // ---------- ИСТОРИЯ (через LogCommand = git log -- path) ----------
+    // ---------- ИСТОРИЯ (git log -- path) ----------
 
     suspend fun history(noteId: String?): List<CommitInfo> = withContext(Dispatchers.IO) {
         withGit { g ->
@@ -147,7 +149,7 @@ class GitNotesRepository(private val baseDir: File) {
         val head = repo.resolve("HEAD") ?: return emptyList()
 
         val logCmd = git.log().add(head)
-        if (path != null) logCmd.addPath(path)   // фильтрация по файлу, как git log -- file
+        if (path != null) logCmd.addPath(path)
         logCmd.setMaxCount(1000)
 
         val out = ArrayList<CommitInfo>()
@@ -162,22 +164,24 @@ class GitNotesRepository(private val baseDir: File) {
                 )
             }
         } catch (_: Exception) {
-            // если log по какой-то причине упал — возвращаем что успели собрать
+            // возвращаем то, что успели собрать
         }
         return out
     }
 
-    // Надёжный поиск blob по пути в дереве конкретного коммита
-    private fun blobIdAt(c: RevCommit, path: String): ObjectId? {
-        val tw = TreeWalk.forPath(c.repository, path, c.tree) ?: return null
+    // ---------- ОТКАТ ----------
+
+    private fun blobIdAt(repo: Repository, c: RevCommit, path: String): ObjectId? {
+        val tw = TreeWalk(repo)
         return try {
-            tw.getObjectId(0)
+            tw.addTree(c.tree)
+            tw.isRecursive = true
+            tw.setFilter(PathFilter.create(path))
+            if (tw.next()) tw.getObjectId(0) else null
         } finally {
             tw.close()
         }
     }
-
-    // ---------- ОТКАТ ----------
 
     suspend fun revertToCommit(id: String, hash: String): Boolean = withContext(Dispatchers.IO) {
         withGit { g ->
@@ -187,7 +191,7 @@ class GitNotesRepository(private val baseDir: File) {
             val walk = RevWalk(repo)
             val bytes: ByteArray? = try {
                 val commit = walk.parseCommit(commitId)
-                val blob = blobIdAt(commit, fileName(id))
+                val blob = blobIdAt(repo, commit, fileName(id))
                 blob?.let { oid -> repo.open(oid).bytes }
             } finally {
                 walk.dispose()
