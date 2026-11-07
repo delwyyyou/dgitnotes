@@ -14,10 +14,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-/**
- * Обёртка над JGit. Каждая заметка — это файл `<id>.md` в рабочем дереве
- * репозитория, живущего в [baseDir]. История/коммиты/откат — нативные git‑операции.
- */
 class GitNotesRepository(private val baseDir: File) {
 
     private val mutex = Mutex()
@@ -52,13 +48,18 @@ class GitNotesRepository(private val baseDir: File) {
             val lines = text.lineSequence().filter { it.isNotBlank() }.toList()
             val title = lines.firstOrNull()?.trim()?.take(60) ?: "Без названия"
             val snippet = lines.drop(1).joinToString(" ").trim().take(120)
-            val last = runCatching { historyFor(id).firstOrNull() }.getOrNull()
+            
+            // Получаем историю для этого файла
+            val lastCommit = runCatching { 
+                historyForFile(id)
+            }.getOrNull()?.firstOrNull()
+            
             NoteSummary(
                 id = id,
                 title = title,
                 snippet = snippet,
-                lastHash = last?.shortHash,
-                lastDate = last?.date ?: 0L
+                lastHash = lastCommit?.shortHash,
+                lastDate = lastCommit?.date ?: 0L
             )
         }
     }
@@ -85,7 +86,6 @@ class GitNotesRepository(private val baseDir: File) {
         id
     }
 
-    /** @return true если был создан коммит, false если изменений нет. */
     suspend fun commitNote(id: String, content: String, message: String): Boolean =
         withContext(Dispatchers.IO) {
             File(baseDir, fileName(id)).writeText(content)
@@ -118,7 +118,24 @@ class GitNotesRepository(private val baseDir: File) {
     // ---------- история ----------
 
     suspend fun history(noteId: String?): List<CommitInfo> = withContext(Dispatchers.IO) {
-        withGit { g -> commitsOf(g.repository, noteId?.let(::fileName)) }
+        withGit { g -> 
+            if (noteId != null) {
+                historyForFile(noteId)
+            } else {
+                allCommits(g.repository)
+            }
+        }
+    }
+
+    /** История конкретной заметки (файла) */
+    private fun historyForFile(noteId: String): List<CommitInfo> {
+        val path = fileName(noteId)
+        return withGit { g -> commitsOf(g.repository, path) }
+    }
+
+    /** Все коммиты репозитория */
+    private fun allCommits(repo: Repository): List<CommitInfo> {
+        return commitsOf(repo, null)
     }
 
     private fun commitsOf(repo: Repository, path: String?): List<CommitInfo> {
@@ -127,6 +144,7 @@ class GitNotesRepository(private val baseDir: File) {
         return try {
             walk.markStart(walk.parseCommit(head))
             walk.maxCount = 1000
+            
             val out = ArrayList<CommitInfo>()
             for (c in walk) {
                 if (path == null || changedIn(repo, c, path)) {
@@ -145,7 +163,6 @@ class GitNotesRepository(private val baseDir: File) {
         }
     }
 
-    /** Изменился ли [path] в коммите [c] относительно его родителей. */
     private fun changedIn(repo: Repository, c: RevCommit, path: String): Boolean {
         val cur = blobIdAt(repo, c, path)
         if (c.parentCount == 0) return cur != null
@@ -169,10 +186,6 @@ class GitNotesRepository(private val baseDir: File) {
 
     // ---------- откат коммита ----------
 
-    /**
-     * Восстанавливает содержимое заметки [id] на момент коммита [hash] и создаёт
-     * новый коммит‑«реверт». Если в том коммите файла не было — удаляет его.
-     */
     suspend fun revertToCommit(id: String, hash: String): Boolean = withContext(Dispatchers.IO) {
         withGit { g ->
             val repo = g.repository
