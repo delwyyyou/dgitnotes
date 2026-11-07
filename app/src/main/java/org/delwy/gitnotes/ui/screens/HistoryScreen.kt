@@ -32,6 +32,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,6 +40,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import org.delwy.gitnotes.data.CommitInfo
 import org.delwy.gitnotes.data.formatDate
 import org.delwy.gitnotes.ui.GitNotesViewModel
@@ -52,29 +54,28 @@ import org.delwy.gitnotes.ui.components.Hamburger
 @Composable
 fun HistoryScreen(
     vm: GitNotesViewModel,
-    noteId: String?,          // null = общая история всех заметок
+    noteId: String?,
     onBack: () -> Unit,
     onMenu: () -> Unit
 ) {
     var commits by remember(noteId) { mutableStateOf<List<CommitInfo>>(emptyList()) }
     val msg by vm.message.collectAsState()
     val snackbar = remember { SnackbarHostState() }
-    
-    // Показать SnackBar при появлении сообщения от ViewModel
-    LaunchedEffect(msg) {
-        msg?.let { 
-            snackbar.showSnackbar(it)
-            vm.clearMessage() 
-        }
+    val scope = rememberCoroutineScope()
+
+    suspend fun reload() {
+        commits = vm.history(noteId)
     }
 
-    // Функция загрузки истории
-    suspend fun reload() { 
-        commits = vm.history(noteId) 
-    }
-    
-    // Загрузить при первом открытии экрана
     LaunchedEffect(noteId) { reload() }
+
+    LaunchedEffect(msg) {
+        msg?.let {
+            snackbar.showSnackbar(it)
+            vm.clearMessage()
+            reload()
+        }
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -82,7 +83,6 @@ fun HistoryScreen(
         topBar = {
             TopAppBar(
                 navigationIcon = {
-                    // КЛИКАБЕЛЬНАЯ СТРЕЛКА НАЗАД
                     IconButton(onClick = onBack) {
                         Text(
                             "←",
@@ -106,8 +106,6 @@ fun HistoryScreen(
         }
     ) { inner ->
         Column(modifier = Modifier.fillMaxSize().padding(inner)) {
-            
-            // Количество коммитов в дисплее
             DisplayBand(text = "${commits.size} записей")
 
             if (commits.isEmpty()) {
@@ -127,14 +125,10 @@ fun HistoryScreen(
                     items(commits, key = { it.hash }) { c ->
                         CommitRow(
                             commit = c,
-                            canRevert = noteId != null, // Можно откатывать только конкретную заметку
+                            canRevert = noteId != null,
                             onRevert = {
                                 if (noteId != null) {
-                                    // Вызываем откат в VM
-                                    vm.revert(noteId, c.hash) {
-                                        // Колбэк после успешного отката — перезагружаем список
-                                        reload()
-                                    }
+                                    vm.revert(noteId, c.hash) { scope.launch { reload() } }
                                 }
                             }
                         )
@@ -143,14 +137,12 @@ fun HistoryScreen(
                 }
             }
 
-            // Нижняя панель
             ActionBar(
-                { m -> 
-                    // Кнопка обновить список (на случай если данные изменились фоново)
-                    GitButton("↻ Обновить", BtnRole.OPERATOR, onClick = { /* просто триггерим recomposition через изменение состояния */ commits = emptyList(); reload() }, modifier = m) 
+                { m ->
+                    GitButton("↻ Обновить", BtnRole.OPERATOR, onClick = { scope.launch { reload() } }, modifier = m)
                 },
-                { m -> 
-                    GitButton("Готово", BtnRole.PRIMARY, onClick = onBack, modifier = m) 
+                { m ->
+                    GitButton("Готово", BtnRole.PRIMARY, onClick = onBack, modifier = m)
                 }
             )
         }
@@ -168,7 +160,6 @@ private fun CommitRow(commit: CommitInfo, canRevert: Boolean, onRevert: () -> Un
     ) {
         Column(Modifier.padding(18.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // Хэш коммита
                 Text(
                     commit.shortHash,
                     fontFamily = FontFamily.Monospace,
@@ -176,24 +167,19 @@ private fun CommitRow(commit: CommitInfo, canRevert: Boolean, onRevert: () -> Un
                     color = MaterialTheme.colorScheme.primary
                 )
                 Spacer(Modifier.width(10.dp))
-                
-                // Дата
                 Text(
                     formatDate(commit.date),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                
                 Spacer(Modifier.weight(1f))
-                
-                // КНОПКА ОТКАТА (кликабельная плашка)
                 if (canRevert) {
                     Text(
                         "Откатить",
                         modifier = Modifier
                             .clip(RoundedCornerShape(12.dp))
                             .background(MaterialTheme.colorScheme.tertiaryContainer)
-                            .clickable(onClick = onRevert) // <-- Вот тут клик
+                            .clickable(onClick = onRevert)
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                         color = MaterialTheme.colorScheme.onTertiaryContainer,
                         style = MaterialTheme.typography.labelLarge,
@@ -201,17 +187,12 @@ private fun CommitRow(commit: CommitInfo, canRevert: Boolean, onRevert: () -> Un
                     )
                 }
             }
-            
             Spacer(Modifier.height(8.dp))
-            
-            // Сообщение коммита
             Text(
                 commit.message.ifBlank { "(без сообщения)" },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface
             )
-            
-            // Автор
             Text(
                 "автор: ${commit.author}",
                 style = MaterialTheme.typography.labelSmall,
