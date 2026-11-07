@@ -32,8 +32,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.Capitalization
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import org.delwy.gitnotes.ui.GitNotesViewModel
 import org.delwy.gitnotes.ui.components.ActionBar
@@ -53,22 +53,21 @@ fun EditorScreen(
 ) {
     var content by remember(noteId) { mutableStateOf("") }
     var original by remember(noteId) { mutableStateOf("") }
-    
-    // Загружаем текст заметки при старте
+
     LaunchedEffect(noteId) {
         val c = vm.loadContent(noteId)
         content = c
         original = c
     }
-    
+
     val dirty = content != original
     val msg by vm.message.collectAsState()
     val snackbar = remember { SnackbarHostState() }
-    
+
     LaunchedEffect(msg) {
-        msg?.let { 
+        msg?.let {
             snackbar.showSnackbar(it)
-            vm.clearMessage() 
+            vm.clearMessage()
         }
     }
 
@@ -78,7 +77,6 @@ fun EditorScreen(
         topBar = {
             TopAppBar(
                 navigationIcon = {
-                    // КЛИКАБЕЛЬНАЯ СТРЕЛКА НАЗАД
                     IconButton(onClick = onBack) {
                         Text(
                             "←",
@@ -102,11 +100,8 @@ fun EditorScreen(
         }
     ) { inner ->
         Column(modifier = Modifier.fillMaxSize().padding(inner)) {
-            
-            // Дисплей сверху справа (длина текста)
             DisplayBand(text = "${content.length} симв.")
 
-            // Поле ввода
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -121,13 +116,13 @@ fun EditorScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .verticalScroll(rememberScrollState()),
-                    placeholder = { 
-                        Text("Начните писать...", color = MaterialTheme.colorScheme.onSurfaceVariant) 
+                    placeholder = {
+                        Text("Начните писать...", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     },
                     textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
                     keyboardOptions = KeyboardOptions(
-                        capitalization = Capitalization.Sentences,
-                        imeAction = ImeAction.Newline
+                        capitalization = KeyboardCapitalization.Sentences,
+                        imeAction = ImeAction.Default
                     ),
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = Color.Transparent,
@@ -139,28 +134,22 @@ fun EditorScreen(
                 )
             }
 
-            // Панель действий снизу
             ActionBar(
-                { m -> 
-                    // AC - Отменить изменения (вернуть к оригиналу)
-                    GitButton("AC", BtnRole.ACTION, onClick = { content = original }, modifier = m, enabled = dirty) 
+                { m ->
+                    GitButton("AC", BtnRole.ACTION, onClick = { content = original }, modifier = m, enabled = dirty)
                 },
-                { m -> 
-                    // Удалить заметку
-                    GitButton("Удалить", BtnRole.ACTION, onClick = { vm.deleteNote(noteId, onBack) }, modifier = m) 
+                { m ->
+                    GitButton("Удалить", BtnRole.ACTION, onClick = { vm.deleteNote(noteId, onBack) }, modifier = m)
                 },
-                { m -> 
-                    // Открыть историю этой заметки
-                    GitButton("История", BtnRole.OPERATOR, onClick = { onOpenHistory(noteId) }, modifier = m) 
+                { m ->
+                    GitButton("История", BtnRole.OPERATOR, onClick = { onOpenHistory(noteId) }, modifier = m)
                 },
-                { m -> 
-                    // Сделать коммит
+                { m ->
                     GitButton("✓ Коммит", BtnRole.PRIMARY, onClick = {
-                        // Берем первую строку как сообщение коммита или дефолт
                         val firstLine = content.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.take(50)
                         vm.commitNote(noteId, content, firstLine ?: "Правка заметки")
-                        original = content // Обновляем baseline, чтобы кнопка стала неактивной
-                    }, modifier = m, enabled = dirty) 
+                        original = content
+                    }, modifier = m, enabled = dirty)
                 }
             )
         }
