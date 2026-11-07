@@ -59,9 +59,21 @@ jobs:
       - name: Build Release APK
         run: gradle assembleRelease --stacktrace --no-daemon
 
+      - name: Find APK file
+        id: find_apk
+        run: |
+          APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" -type f | head -1)
+          if [ -z "$APK_PATH" ]; then
+            echo "Error: No APK found in release folder!"
+            exit 1
+          fi
+          echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
+          echo "Found APK at: $APK_PATH"
+
       - name: Upload Release Artifact
         uses: actions/upload-artifact@v4
         with:
           name: gitnotes-release-apk
-          path: app/build/outputs/apk/release/app-release.apk
+          path: ${{ steps.find_apk.outputs.apk_path }}
           retention-days: 30
+          if-no-files-found: error
