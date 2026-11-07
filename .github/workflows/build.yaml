@@ -49,31 +49,48 @@ jobs:
             -keypass android \
             -dname "CN=GitNotes CI, OU=Test, O=Delwy, L=Moscow, ST=Ru, C=RU"
 
-      - name: Configure Signing Properties
-        run: |
-          echo "RELEASE_STORE_FILE=$(pwd)/ci-release.keystore" >> gradle.properties
-          echo "RELEASE_KEY_ALIAS=gitnotes-key" >> gradle.properties
-          echo "RELEASE_STORE_PASSWORD=android" >> gradle.properties
-          echo "RELEASE_KEY_PASSWORD=android" >> gradle.properties
-
-      - name: Build Release APK
+      - name: Build Release APK (Unsigned)
         run: gradle assembleRelease --stacktrace --no-daemon
 
-      - name: Find APK file
-        id: find_apk
+      - name: Find and Sign APK
+        id: sign_apk
         run: |
-          APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" -type f | head -1)
-          if [ -z "$APK_PATH" ]; then
-            echo "Error: No APK found in release folder!"
+          # Ищем любой apk в папке release (обычно это app-release-unsigned.apk)
+          UNSIGNED_APK=$(find app/build/outputs/apk/release -name "*.apk" -type f | head -1)
+          
+          if [ -z "$UNSIGNED_APK" ]; then
+            echo "Error: No APK found!"
             exit 1
           fi
-          echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
-          echo "Found APK at: $APK_PATH"
+          
+          echo "Found unsigned APK: $UNSIGNED_APK"
+          
+          # Формируем имя для подписанного файла
+          SIGNED_APK="${UNSIGNED_APK%-unsigned.apk}.apk"
+          if [ "$SIGNED_APK" = "$UNSIGNED_APK" ]; then
+             SIGNED_APK="${UNSIGNED_APK%.apk}-signed.apk"
+          fi
+          
+          echo "Signing to: $SIGNED_APK"
+          
+          # Подписываем с помощью apksigner из build-tools
+          $ANDROID_HOME/build-tools/34.0.0/apksigner sign \
+            --ks ci-release.keystore \
+            --ks-key-alias gitnotes-key \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --out "$SIGNED_APK" \
+            "$UNSIGNED_APK"
+            
+          # Проверяем подпись
+          $ANDROID_HOME/build-tools/34.0.0/apksigner verify "$SIGNED_APK"
+          
+          echo "signed_path=$SIGNED_APK" >> $GITHUB_OUTPUT
 
       - name: Upload Release Artifact
         uses: actions/upload-artifact@v4
         with:
           name: gitnotes-release-apk
-          path: ${{ steps.find_apk.outputs.apk_path }}
+          path: ${{ steps.sign_apk.outputs.signed_path }}
           retention-days: 30
           if-no-files-found: error
