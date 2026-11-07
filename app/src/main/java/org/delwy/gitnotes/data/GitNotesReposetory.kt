@@ -22,6 +22,7 @@ class GitNotesRepository(private val baseDir: File) {
 
     private fun fileName(id: String) = "$id.md"
 
+    // --- Вспомогательная функция для безопасной работы с JGit ---
     private suspend fun <T> withGit(block: (Git) -> T): T = withContext(Dispatchers.IO) {
         mutex.withLock {
             if (!baseDir.exists()) baseDir.mkdirs()
@@ -36,25 +37,38 @@ class GitNotesRepository(private val baseDir: File) {
         }
     }
 
-    // ---------- чтение рабочего дерева ----------
+    // --- Синхронная версия для использования внутри других функций ---
+    private fun <T> withGitSync(block: (Git) -> T): T {
+        if (!baseDir.exists()) baseDir.mkdirs()
+        val dotGit = File(baseDir, ".git")
+        val git = if (dotGit.exists()) Git.open(baseDir)
+        else Git.init().setDirectory(baseDir).setInitialBranch("main").call()
+        return try {
+            block(git)
+        } finally {
+            runCatching { git.close() }
+        }
+    }
+
+    // ---------- ЧТЕНИЕ РАБОЧЕГО ДЕРЕВА ----------
 
     suspend fun listNotes(): List<NoteSummary> = withContext(Dispatchers.IO) {
         if (!baseDir.exists()) return@withContext emptyList()
         val files = baseDir.listFiles()?.filter { it.isFile && it.name.endsWith(".md") }
             ?.sortedByDescending { it.lastModified() } ?: emptyList()
-        
+
         files.map { f ->
             val id = f.name.removeSuffix(".md")
             val text = runCatching { f.readText() }.getOrDefault("")
             val lines = text.lineSequence().filter { it.isNotBlank() }.toList()
             val title = lines.firstOrNull()?.trim()?.take(60) ?: "Без названия"
             val snippet = lines.drop(1).joinToString(" ").trim().take(120)
-            
-            // Получаем последний коммит для этого файла
-            val lastCommit = runCatching { 
+
+            // Используем синхронную версию, чтобы не нарушать правила корутин
+            val lastCommit = runCatching {
                 historySync(id).firstOrNull()
             }.getOrNull()
-            
+
             NoteSummary(
                 id = id,
                 title = title,
@@ -70,7 +84,7 @@ class GitNotesRepository(private val baseDir: File) {
         if (f.exists()) runCatching { f.readText() }.getOrDefault("") else ""
     }
 
-    // ---------- запись + коммит ----------
+    // ---------- ЗАПИСЬ + КОММИТ ----------
 
     suspend fun createNote(): String = withContext(Dispatchers.IO) {
         val id = java.util.UUID.randomUUID().toString()
@@ -116,7 +130,7 @@ class GitNotesRepository(private val baseDir: File) {
         }
     }
 
-    // ---------- история ----------
+    // ---------- ИСТОРИЯ ----------
 
     suspend fun history(noteId: String?): List<CommitInfo> = withContext(Dispatchers.IO) {
         withGit { g ->
@@ -128,19 +142,11 @@ class GitNotesRepository(private val baseDir: File) {
         }
     }
 
-    /** Синхронная версия для использования внутри listNotes */
+    /** Синхронная версия для listNotes */
     private fun historySync(noteId: String): List<CommitInfo> {
         val path = fileName(noteId)
-        return try {
-            val git = if (File(baseDir, ".git").exists()) Git.open(baseDir)
-            else Git.init().setDirectory(baseDir).setInitialBranch("main").call()
-            try {
-                commitsOf(git.repository, path)
-            } finally {
-                runCatching { git.close() }
-            }
-        } catch (_: Exception) {
-            emptyList()
+        return withGitSync { g ->
+            commitsOf(g.repository, path)
         }
     }
 
@@ -150,18 +156,19 @@ class GitNotesRepository(private val baseDir: File) {
         return try {
             walk.markStart(walk.parseCommit(head))
             walk.setRetainBody(false) // Экономим память
-            
+
             val out = ArrayList<CommitInfo>()
             var count = 0
             for (c in walk) {
                 count++
-                if (count > 1000) break // Ограничиваем глубину
-                
+                if (count > 1000) break // Лимит глубины истории
+
                 if (path == null || changedIn(repo, c, path)) {
-                    // shortMessage возвращает ByteArray, конвертируем
+                    // *** ГЛАВНОЕ ИСПРАВЛЕНИЕ ***
+                    // shortMessage возвращает ByteArray. Конвертируем в String.
                     val msgBytes = c.shortMessage
                     val msgStr = if (msgBytes != null) String(msgBytes, Charsets.UTF_8).trim() else ""
-                    
+
                     out += CommitInfo(
                         hash = c.id.name,
                         shortHash = c.id.name.take(7),
@@ -198,20 +205,24 @@ class GitNotesRepository(private val baseDir: File) {
         }
     }
 
-    // ---------- откат коммита ----------
+    // ---------- ОТКАТ КОММИТА ----------
 
     suspend fun revertToCommit(id: String, hash: String): Boolean = withContext(Dispatchers.IO) {
         withGit { g ->
             val repo = g.repository
+            // resolve принимает String, возвращает ObjectId
             val commitId = repo.resolve(hash) ?: return@withGit false
+
             val walk = RevWalk(repo)
             val bytes: ByteArray? = try {
                 val commit = walk.parseCommit(commitId)
                 val blob = blobIdAt(repo, commit, fileName(id))
-                blob?.let { repo.open(it).bytes }
+                // open(ObjectId) возвращает ObjectLoader, у него есть getBytes()
+                blob?.let { loader -> repo.open(loader).bytes }
             } finally {
                 walk.dispose()
             }
+
             if (bytes != null) {
                 File(baseDir, fileName(id)).writeBytes(bytes)
                 g.add().addFilepattern(fileName(id)).call()
