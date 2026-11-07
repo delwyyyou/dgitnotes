@@ -24,45 +24,63 @@ class GitNotesViewModel(app: Application) : AndroidViewModel(app) {
 
     init { refresh() }
 
-    fun refresh() = viewModelScope.launch {
-        _notes.value = runCatching { repo.listNotes() }
-            .onFailure { _message.value = "Ошибка чтения: ${it.message}" }
-            .getOrDefault(emptyList())
-    }
-
     fun clearMessage() { _message.value = null }
+
+    fun refresh() = viewModelScope.launch {
+        try {
+            _notes.value = repo.listNotes()
+        } catch (e: Exception) {
+            _message.value = "Ошибка чтения: ${e.message}"
+        }
+    }
 
     suspend fun loadContent(id: String): String = repo.readNote(id)
 
     fun createNote(onCreated: (String) -> Unit) = viewModelScope.launch {
-        val id = runCatching { repo.createNote() }
-            .onFailure { _message.value = "Не удалось создать: ${it.message}" }
-            .getOrNull()
-        if (id != null) { refresh(); onCreated(id) }
+        try {
+            val id: String = repo.createNote()
+            refresh()
+            onCreated(id)
+        } catch (e: Exception) {
+            _message.value = "Не удалось создать: ${e.message}"
+        }
     }
 
     fun commitNote(id: String, content: String, message: String) = viewModelScope.launch {
-        val ok = runCatching { repo.commitNote(id, content, message) }
-            .onFailure { _message.value = "Ошибка коммита: ${it.message}" }
-            .getOrDefault(false)
-        _message.value = if (ok) "Коммит создан" else "Нет изменений для коммита"
-        refresh()
+        try {
+            val ok: Boolean = repo.commitNote(id, content, message)
+            _message.value = if (ok) "Коммит создан" else "Нет изменений для коммита"
+            refresh()
+        } catch (e: Exception) {
+            _message.value = "Ошибка коммита: ${e.message}"
+        }
     }
 
     fun deleteNote(id: String, onDone: () -> Unit) = viewModelScope.launch {
-        runCatching { repo.deleteNote(id) }
-            .onFailure { _message.value = "Ошибка удаления: ${it.message}" }
-        refresh(); onDone()
+        try {
+            repo.deleteNote(id)
+            refresh()
+            onDone()
+        } catch (e: Exception) {
+            _message.value = "Ошибка удаления: ${e.message}"
+        }
     }
 
     suspend fun history(noteId: String?): List<CommitInfo> =
-        runCatching { repo.history(noteId) }.getOrDefault(emptyList())
+        try {
+            repo.history(noteId)
+        } catch (e: Exception) {
+            emptyList()
+        }
 
     fun revert(id: String, hash: String, onDone: () -> Unit) = viewModelScope.launch {
-        val ok = runCatching { repo.revertToCommit(id, hash) }
-            .onFailure { _message.value = "Ошибка отката: ${it.message}" }
-            .getOrDefault(false)
-        _message.value = if (ok) "Выполнен откат к ${hash.take(7)}" else "Коммит не найден"
-        refresh(); onDone()
+        try {
+            val ok: Boolean = repo.revertToCommit(id, hash)
+            _message.value = if (ok) "Выполнен откат к ${hash.take(7)}" else "Коммит не найден"
+            refresh()
+            onDone()
+        } catch (e: Exception) {
+            _message.value = "Ошибка отката: ${e.message}"
+        }
     }
 }
