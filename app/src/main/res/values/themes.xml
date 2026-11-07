@@ -1,9 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Базовая тема без ActionBar, чтобы Compose занимал весь экран -->
     <style name="Theme.GitNotes" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/window_bg</item>
+        
+        <!-- Прозрачные статус-бар и навигация для edge-to-edge -->
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
+        
+        <!-- Иконки в статус-баре светлые (для темного фона) -->
         <item name="android:windowLightStatusBar">false</item>
+        
+        <!-- Отключаем системные затемнения баров -->
         <item name="android:enforceStatusBarContrast">false</item>
         <item name="android:enforceNavigationBarContrast">false</item>
     </style>
