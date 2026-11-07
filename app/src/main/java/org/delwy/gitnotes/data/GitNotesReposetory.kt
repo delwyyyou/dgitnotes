@@ -42,6 +42,7 @@ class GitNotesRepository(private val baseDir: File) {
         if (!baseDir.exists()) return@withContext emptyList()
         val files = baseDir.listFiles()?.filter { it.isFile && it.name.endsWith(".md") }
             ?.sortedByDescending { it.lastModified() } ?: emptyList()
+        
         files.map { f ->
             val id = f.name.removeSuffix(".md")
             val text = runCatching { f.readText() }.getOrDefault("")
@@ -49,10 +50,10 @@ class GitNotesRepository(private val baseDir: File) {
             val title = lines.firstOrNull()?.trim()?.take(60) ?: "Без названия"
             val snippet = lines.drop(1).joinToString(" ").trim().take(120)
             
-            // Получаем историю для этого файла
+            // Получаем последний коммит для этого файла
             val lastCommit = runCatching { 
-                historyForFile(id)
-            }.getOrNull()?.firstOrNull()
+                historySync(id).firstOrNull()
+            }.getOrNull()
             
             NoteSummary(
                 id = id,
@@ -118,24 +119,29 @@ class GitNotesRepository(private val baseDir: File) {
     // ---------- история ----------
 
     suspend fun history(noteId: String?): List<CommitInfo> = withContext(Dispatchers.IO) {
-        withGit { g -> 
+        withGit { g ->
             if (noteId != null) {
-                historyForFile(noteId)
+                commitsOf(g.repository, fileName(noteId))
             } else {
-                allCommits(g.repository)
+                commitsOf(g.repository, null)
             }
         }
     }
 
-    /** История конкретной заметки (файла) */
-    private fun historyForFile(noteId: String): List<CommitInfo> {
+    /** Синхронная версия для использования внутри listNotes */
+    private fun historySync(noteId: String): List<CommitInfo> {
         val path = fileName(noteId)
-        return withGit { g -> commitsOf(g.repository, path) }
-    }
-
-    /** Все коммиты репозитория */
-    private fun allCommits(repo: Repository): List<CommitInfo> {
-        return commitsOf(repo, null)
+        return try {
+            val git = if (File(baseDir, ".git").exists()) Git.open(baseDir)
+            else Git.init().setDirectory(baseDir).setInitialBranch("main").call()
+            try {
+                commitsOf(git.repository, path)
+            } finally {
+                runCatching { git.close() }
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
 
     private fun commitsOf(repo: Repository, path: String?): List<CommitInfo> {
@@ -143,15 +149,23 @@ class GitNotesRepository(private val baseDir: File) {
         val walk = RevWalk(repo)
         return try {
             walk.markStart(walk.parseCommit(head))
-            walk.maxCount = 1000
+            walk.setRetainBody(false) // Экономим память
             
             val out = ArrayList<CommitInfo>()
+            var count = 0
             for (c in walk) {
+                count++
+                if (count > 1000) break // Ограничиваем глубину
+                
                 if (path == null || changedIn(repo, c, path)) {
+                    // shortMessage возвращает ByteArray, конвертируем
+                    val msgBytes = c.shortMessage
+                    val msgStr = if (msgBytes != null) String(msgBytes, Charsets.UTF_8).trim() else ""
+                    
                     out += CommitInfo(
                         hash = c.id.name,
                         shortHash = c.id.name.take(7),
-                        message = String(c.shortMessage, Charsets.UTF_8).trim(),
+                        message = msgStr,
                         author = c.authorIdent?.name ?: "—",
                         date = c.commitTime.toLong() * 1000L
                     )
